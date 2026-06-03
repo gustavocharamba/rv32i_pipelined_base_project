@@ -7,7 +7,7 @@
 //     2'b00 : Load/Store  -> forcar ADD
 //     2'b01 : Branch BEQ  -> forcar SUB
 //     2'b10 : R-type      -> decodificar via Funct3/Funct7
-//     2'b11 : OP-IMM      -> decodificar via Funct3/Funct7
+//     2'b11 : I_TYPE      -> decodificar via Funct3/Funct7
 //   Funct7[6:0], Funct3[2:0] : campos da instrucao
 //
 // Saida Operation[3:0] -> pl_alu.sv:
@@ -56,7 +56,7 @@ module pl_alu_ctrl (
                 endcase
             end
 
-            2'b11: begin                // OP-IMM: addi/andi/ori/slti/slli/srli/srai
+            2'b11: begin                // I_TYPE: addi/andi/ori/slti/slli/srli/srai
                 case (Funct3)
                     3'h0: Operation = ALU_ADD; // ADDI
                     3'h1: Operation = ALU_SLL; // SLLI
