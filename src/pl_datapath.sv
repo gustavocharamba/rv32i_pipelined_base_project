@@ -35,6 +35,10 @@ module pl_datapath (
     input  logic        MemRead,
     input  logic        MemWrite,
     input  logic        Branch,
+    input  logic        Jump,
+    input  logic        JumpReg,
+    input  logic        ALUASrc,
+    input  logic [1:0]  ResultSrc,
     input  logic [1:0]  ALUOp,
 
     // Codigo de operacao da ALU (pl_alu_ctrl, usa campos do estagio EX)
@@ -81,23 +85,28 @@ module pl_datapath (
     // Hazard / branch
     logic        stall;
     logic        pc_src;
-    logic [31:0] branch_target;
+    logic        branch_taken;
+    logic [31:0] pc_target;
 
     // ID
     logic [31:0] rd1, rd2, imm_ext;
 
     // EX -- forwarding
     logic [1:0]  fwd_a, fwd_b;
-    logic [31:0] fwd_srca, fwd_srcb, alu_srcb;
+    logic [31:0] fwd_srca, fwd_srcb, alu_srca, alu_srcb;
     logic [31:0] alu_result;
     logic        zero;
 
     // WB
     logic [31:0] wb_data;
+    logic [31:0] ex_mem_forward_data;
 
     // MEM
     logic        mmio_sel;
-    logic [31:0] dmem_rd, mmio_rd, mem_read_data;
+    logic [3:0]  store_byte_en;
+    logic [31:0] dmem_rd, mmio_rd, mem_read_data, load_data, store_write_data;
+    logic [7:0]  load_byte;
+    logic [15:0] load_half;
 
     // =========================================================================
     // IF -- Busca de instrucao
@@ -106,7 +115,7 @@ module pl_datapath (
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)      pc_reg <= 32'b0;
-        else if (pc_src) pc_reg <= branch_target;   // branch tem prioridade
+        else if (pc_src) pc_reg <= pc_target;       // branch/jump tem prioridade
         else if (!stall) pc_reg <= pc_plus4;
         // else stall: PC mantido
     end
@@ -151,7 +160,14 @@ module pl_datapath (
     );
 
     // Dado de write-back (mux WB): usado tambem pelo forwarding MEM/WB->EX
-    assign wb_data = mem_wb.mem_to_reg ? mem_wb.read_data : mem_wb.alu_result;
+    always_comb begin
+        case (mem_wb.result_src)
+            2'b01:   wb_data = mem_wb.read_data;   // loads
+            2'b10:   wb_data = mem_wb.pc_plus4;    // jal / jalr
+            2'b11:   wb_data = mem_wb.imm_ext;     // lui
+            default: wb_data = mem_wb.alu_result;  // ALU / auipc
+        endcase
+    end
 
     pl_regfile regfile (
         .clk       (clk),
@@ -186,7 +202,12 @@ module pl_datapath (
             id_ex.mem_write  <= 1'b0;
             id_ex.alu_op     <= 2'b00;
             id_ex.branch     <= 1'b0;
+            id_ex.jump       <= 1'b0;
+            id_ex.jump_reg   <= 1'b0;
+            id_ex.alu_a_src  <= 1'b0;
+            id_ex.result_src <= 2'b00;
             id_ex.pc         <= 32'b0;
+            id_ex.pc_plus4   <= 32'b0;
             id_ex.rd1        <= 32'b0;
             id_ex.rd2        <= 32'b0;
             id_ex.rs1        <= 5'b0;
@@ -203,7 +224,12 @@ module pl_datapath (
             id_ex.mem_write  <= 1'b0;
             id_ex.alu_op     <= 2'b00;
             id_ex.branch     <= 1'b0;
+            id_ex.jump       <= 1'b0;
+            id_ex.jump_reg   <= 1'b0;
+            id_ex.alu_a_src  <= 1'b0;
+            id_ex.result_src <= 2'b00;
             id_ex.pc         <= 32'b0;
+            id_ex.pc_plus4   <= 32'b0;
             id_ex.rd1        <= 32'b0;
             id_ex.rd2        <= 32'b0;
             id_ex.rs1        <= 5'b0;
@@ -220,7 +246,12 @@ module pl_datapath (
             id_ex.mem_write  <= MemWrite;
             id_ex.alu_op     <= ALUOp;
             id_ex.branch     <= Branch;
+            id_ex.jump       <= Jump;
+            id_ex.jump_reg   <= JumpReg;
+            id_ex.alu_a_src  <= ALUASrc;
+            id_ex.result_src <= ResultSrc;
             id_ex.pc         <= if_id.pc;
+            id_ex.pc_plus4   <= if_id.pc + 32'd4;
             id_ex.rd1        <= rd1;
             id_ex.rd2        <= rd2;
             id_ex.rs1        <= if_id.instr[19:15];
@@ -251,10 +282,19 @@ module pl_datapath (
         .forward_b        (fwd_b)
     );
 
+    // Valor adiantado de EX/MEM: nem toda instrucao escreve alu_result.
+    always_comb begin
+        case (ex_mem.result_src)
+            2'b10:   ex_mem_forward_data = ex_mem.pc_plus4;   // jal / jalr
+            2'b11:   ex_mem_forward_data = ex_mem.imm_ext;    // lui
+            default: ex_mem_forward_data = ex_mem.alu_result; // ALU / auipc
+        endcase
+    end
+
     // Mux de forwarding para SrcA
     always_comb begin
         case (fwd_a)
-            2'b10:   fwd_srca = ex_mem.alu_result;
+            2'b10:   fwd_srca = ex_mem_forward_data;
             2'b01:   fwd_srca = wb_data;
             default: fwd_srca = id_ex.rd1;
         endcase
@@ -263,26 +303,40 @@ module pl_datapath (
     // Mux de forwarding para SrcB (antes do mux ALUSrc)
     always_comb begin
         case (fwd_b)
-            2'b10:   fwd_srcb = ex_mem.alu_result;
+            2'b10:   fwd_srcb = ex_mem_forward_data;
             2'b01:   fwd_srcb = wb_data;
             default: fwd_srcb = id_ex.rd2;
         endcase
     end
 
-    // Mux ALUSrc: imediato ou registrador
+    // Muxes da ALU: PC ou registrador em A; imediato ou registrador em B
+    assign alu_srca = id_ex.alu_a_src ? id_ex.pc : fwd_srca;
     assign alu_srcb = id_ex.alu_src ? id_ex.imm_ext : fwd_srcb;
 
     pl_alu alu (
-        .SrcA      (fwd_srca),
+        .SrcA      (alu_srca),
         .SrcB      (alu_srcb),
         .Operation (ALU_CC),
         .ALUResult (alu_result),
         .Zero      (zero)
     );
 
-    // Branch resolvido no estagio EX (flush 2 instrucoes se taken)
-    assign branch_target = id_ex.pc + id_ex.imm_ext;
-    assign pc_src        = id_ex.branch && zero;
+    // Branch/jump resolvido no estagio EX (flush 2 instrucoes se taken)
+    always_comb begin
+        case (id_ex.funct3)
+            3'b000:  branch_taken = (fwd_srca == fwd_srcb);                  // BEQ
+            3'b001:  branch_taken = (fwd_srca != fwd_srcb);                  // BNE
+            3'b100:  branch_taken = ($signed(fwd_srca) <  $signed(fwd_srcb)); // BLT
+            3'b101:  branch_taken = ($signed(fwd_srca) >= $signed(fwd_srcb)); // BGE
+            3'b110:  branch_taken = (fwd_srca <  fwd_srcb);                  // BLTU
+            3'b111:  branch_taken = (fwd_srca >= fwd_srcb);                  // BGEU
+            default: branch_taken = 1'b0;
+        endcase
+    end
+
+    assign pc_target = id_ex.jump_reg ? {alu_result[31:1], 1'b0}
+                                      : (id_ex.pc + id_ex.imm_ext);
+    assign pc_src    = (id_ex.branch && branch_taken) || id_ex.jump;
 
     // =========================================================================
     // Registrador EX/MEM
@@ -293,7 +347,10 @@ module pl_datapath (
             ex_mem.reg_write   <= 1'b0;
             ex_mem.mem_read    <= 1'b0;
             ex_mem.mem_write   <= 1'b0;
+            ex_mem.result_src  <= 2'b00;
             ex_mem.alu_result  <= 32'b0;
+            ex_mem.pc_plus4    <= 32'b0;
+            ex_mem.imm_ext     <= 32'b0;
             ex_mem.write_data  <= 32'b0;
             ex_mem.rd          <= 5'b0;
             ex_mem.funct3      <= 3'b0;
@@ -302,7 +359,10 @@ module pl_datapath (
             ex_mem.reg_write   <= id_ex.reg_write;
             ex_mem.mem_read    <= id_ex.mem_read;
             ex_mem.mem_write   <= id_ex.mem_write;
+            ex_mem.result_src  <= id_ex.result_src;
             ex_mem.alu_result  <= alu_result;
+            ex_mem.pc_plus4    <= id_ex.pc_plus4;
+            ex_mem.imm_ext     <= id_ex.imm_ext;
             ex_mem.write_data  <= fwd_srcb;   // rs2 adiantado (para SW/MMIO)
             ex_mem.rd          <= id_ex.rd;
             ex_mem.funct3      <= id_ex.funct3;
@@ -314,11 +374,37 @@ module pl_datapath (
     // =========================================================================
     assign mmio_sel = ex_mem.alu_result[10];
 
+    always_comb begin
+        store_byte_en   = 4'b1111;
+        store_write_data = ex_mem.write_data;
+
+        case (ex_mem.funct3)
+            3'b000: begin // SB
+                store_write_data = {4{ex_mem.write_data[7:0]}};
+                case (ex_mem.alu_result[1:0])
+                    2'b00:   store_byte_en = 4'b0001;
+                    2'b01:   store_byte_en = 4'b0010;
+                    2'b10:   store_byte_en = 4'b0100;
+                    default: store_byte_en = 4'b1000;
+                endcase
+            end
+            3'b001: begin // SH
+                store_write_data = {2{ex_mem.write_data[15:0]}};
+                store_byte_en    = ex_mem.alu_result[1] ? 4'b1100 : 4'b0011;
+            end
+            default: begin // SW
+                store_byte_en    = 4'b1111;
+                store_write_data = ex_mem.write_data;
+            end
+        endcase
+    end
+
     pl_dmem dmem (
         .clk       (clk),
         .MemWrite  (ex_mem.mem_write & ~mmio_sel),
+        .ByteEn    (store_byte_en),
         .addr      (ex_mem.alu_result[9:2]),
-        .WriteData (ex_mem.write_data),
+        .WriteData (store_write_data),
         .ReadData  (dmem_rd)
     );
 
@@ -340,10 +426,30 @@ module pl_datapath (
 
     assign mem_read_data = mmio_sel ? mmio_rd : dmem_rd;
 
+    always_comb begin
+        case (ex_mem.alu_result[1:0])
+            2'b00:   load_byte = mem_read_data[7:0];
+            2'b01:   load_byte = mem_read_data[15:8];
+            2'b10:   load_byte = mem_read_data[23:16];
+            default: load_byte = mem_read_data[31:24];
+        endcase
+
+        load_half = ex_mem.alu_result[1] ? mem_read_data[31:16]
+                                         : mem_read_data[15:0];
+
+        case (ex_mem.funct3)
+            3'b000:  load_data = {{24{load_byte[7]}}, load_byte}; // LB
+            3'b001:  load_data = {{16{load_half[15]}}, load_half}; // LH
+            3'b100:  load_data = {24'b0, load_byte};               // LBU
+            3'b101:  load_data = {16'b0, load_half};               // LHU
+            default: load_data = mem_read_data;                    // LW
+        endcase
+    end
+
     // Saidas de observabilidade para o testbench
     assign mem_wr_en   = ex_mem.mem_write & ~mmio_sel;
     assign mem_wr_addr = ex_mem.alu_result[9:2];
-    assign mem_wr_data = ex_mem.write_data;
+    assign mem_wr_data = store_write_data;
 
     // =========================================================================
     // Registrador MEM/WB
@@ -352,18 +458,24 @@ module pl_datapath (
         if (!rst_n) begin
             mem_wb.mem_to_reg <= 1'b0;
             mem_wb.reg_write  <= 1'b0;
+            mem_wb.result_src <= 2'b00;
             mem_wb.alu_result <= 32'b0;
+            mem_wb.pc_plus4   <= 32'b0;
+            mem_wb.imm_ext    <= 32'b0;
             mem_wb.read_data  <= 32'b0;
             mem_wb.rd         <= 5'b0;
         end else begin
             mem_wb.mem_to_reg <= ex_mem.mem_to_reg;
             mem_wb.reg_write  <= ex_mem.reg_write;
+            mem_wb.result_src <= ex_mem.result_src;
             mem_wb.alu_result <= ex_mem.alu_result;
-            mem_wb.read_data  <= mem_read_data;
+            mem_wb.pc_plus4   <= ex_mem.pc_plus4;
+            mem_wb.imm_ext    <= ex_mem.imm_ext;
+            mem_wb.read_data  <= load_data;
             mem_wb.rd         <= ex_mem.rd;
         end
     end
 
-    // WB: wb_data = mem_to_reg ? read_data : alu_result  (definido acima, no bloco ID)
+    // WB: wb_data selecionado por result_src (definido acima, no bloco ID)
 
 endmodule

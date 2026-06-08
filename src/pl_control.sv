@@ -8,20 +8,19 @@
 // Instrucoes suportadas:
 //   R-type  (0110011): add, sub, or, and, slt, xor, sll, srl, sra, sltu
 //   I-type  (0010011): addi, andi, ori, slti, slli, srli, srai
-//   I-type  (0000011): lw
-//   S-type  (0100011): sw
-//   B-type  (1100011): beq
+//   I-type  (0000011): lb, lh, lw, lbu, lhu
+//   S-type  (0100011): sb, sh, sw
+//   B-type  (1100011): beq, bne, blt, bge, bltu, bgeu
+//   J-type  (1101111): jal
+//   I-type  (1100111): jalr
+//   U-type  (0110111): lui
+//   U-type  (0010111): auipc
 //
-// Tabela de sinais de controle:
-//   Sinal     | R-type | OP-IMM | lw | sw | beq
-//   ----------|--------|--------|----|----|-----
-//   ALUSrc    |   0    |   1    |  1 |  1 |  0    0=reg, 1=imm
-//   MemtoReg  |   0    |   0    |  1 |  - |  -    0=ALU, 1=mem
-//   RegWrite  |   1    |   1    |  1 |  0 |  0
-//   MemRead   |   0    |   0    |  1 |  0 |  0
-//   MemWrite  |   0    |   0    |  0 |  1 |  0
-//   Branch    |   0    |   0    |  0 |  0 |  1
-//   ALUOp     |  10    |   11   | 00 | 00 | 01
+// Convencoes principais:
+//   ALUSrc    : 0=registrador, 1=imediato
+//   ALUASrc   : 0=rs1, 1=PC (AUIPC)
+//   ResultSrc : 00=ALU, 01=memoria, 10=PC+4, 11=imediato (LUI)
+//   ALUOp     : 00=ADD fixo, 01=branch, 10=R-type, 11=I-type aritmetico
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -34,6 +33,10 @@ module pl_control (
     output logic       MemRead,
     output logic       MemWrite,
     output logic       Branch,
+    output logic       Jump,
+    output logic       JumpReg,
+    output logic       ALUASrc,
+    output logic [1:0] ResultSrc,
     output logic [1:0] ALUOp
 );
 
@@ -42,6 +45,10 @@ module pl_control (
     localparam LOAD   = 7'b0000011;
     localparam STORE  = 7'b0100011;
     localparam BRANCH = 7'b1100011;
+    localparam JAL    = 7'b1101111;
+    localparam JALR   = 7'b1100111;
+    localparam LUI    = 7'b0110111;
+    localparam AUIPC  = 7'b0010111;
 
     always_comb begin
         ALUSrc   = 1'b0;
@@ -50,6 +57,10 @@ module pl_control (
         MemRead  = 1'b0;
         MemWrite = 1'b0;
         Branch   = 1'b0;
+        Jump     = 1'b0;
+        JumpReg  = 1'b0;
+        ALUASrc  = 1'b0;
+        ResultSrc = 2'b00;
         ALUOp    = 2'b00;
 
         case (Opcode)
@@ -70,6 +81,7 @@ module pl_control (
                 MemtoReg = 1'b1;
                 RegWrite = 1'b1;
                 MemRead  = 1'b1;
+                ResultSrc = 2'b01;
                 ALUOp    = 2'b00;
             end
             STORE: begin
@@ -80,6 +92,29 @@ module pl_control (
             BRANCH: begin
                 Branch   = 1'b1;
                 ALUOp    = 2'b01;
+            end
+            JAL: begin
+                RegWrite  = 1'b1;
+                Jump      = 1'b1;
+                ResultSrc = 2'b10;
+            end
+            JALR: begin
+                ALUSrc    = 1'b1;
+                RegWrite  = 1'b1;
+                Jump      = 1'b1;
+                JumpReg   = 1'b1;
+                ResultSrc = 2'b10;
+                ALUOp     = 2'b00;
+            end
+            LUI: begin
+                RegWrite  = 1'b1;
+                ResultSrc = 2'b11;
+            end
+            AUIPC: begin
+                ALUSrc    = 1'b1;
+                ALUASrc   = 1'b1;
+                RegWrite  = 1'b1;
+                ALUOp     = 2'b00;
             end
             default: ; // sinais permanecem em zero (seguro)
         endcase
