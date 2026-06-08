@@ -251,17 +251,23 @@ Não foi necessário alterar `pl_hazard.sv` nem `pl_forward.sv`, porque a lógic
 
 ---
 
-## 6. Evidências no código
+## 6. O que foi alterado no código
 
-Esta parte é importante para a apresentação porque mostra exatamente onde a implementação aparece no projeto.
+Esta parte serve como roteiro direto para a apresentação. Em cada item, eu indico o arquivo, as linhas principais alteradas, o que foi feito no código e por que essa alteração foi necessária.
 
 ### 6.1 Etapa 1 no código
 
 #### Operações novas na ALU
 
-Arquivo: `src/pl_alu.sv`, linhas 32 a 50.
+**Arquivo:** `src/pl_alu.sv`
 
-Nesse trecho foram adicionadas as operações usadas pelas novas instruções R-type:
+**Linhas principais:** 32 a 50.
+
+**O que eu alterei:** adicionei os códigos internos da ALU para `XOR`, `SLL`, `SRL`, `SRA` e `SLTU`, e também adicionei os casos que calculam o resultado dessas operações.
+
+**Por que alterei:** essas instruções R-type precisam ser executadas diretamente pela ALU no estágio `EX`. Sem esses casos, o controle até poderia decodificar a instrução, mas a ALU não saberia qual operação realizar.
+
+Trecho principal:
 
 ```systemverilog
 localparam ALU_XOR  = 4'd06;
@@ -277,11 +283,19 @@ ALU_SRA:  ALUResult = $signed(SrcA) >>> SrcB[4:0];
 ALU_SLTU: ALUResult = {31'b0, (SrcA < SrcB)};
 ```
 
-Explicação para apresentar: aqui a ALU passou a saber executar as operações novas. O deslocamento usa apenas `SrcB[4:0]`, porque em RV32I o deslocamento vai de 0 a 31 posições.
+Na apresentação, eu explicaria que o deslocamento usa apenas `SrcB[4:0]` porque, no RV32I, só existem 32 posições possíveis de deslocamento, de 0 a 31.
 
 #### Decodificação das instruções R-type e I-type
 
-Arquivo: `src/pl_alu_ctrl.sv`, linhas 45 a 66.
+**Arquivo:** `src/pl_alu_ctrl.sv`
+
+**Linhas principais:** 45 a 66.
+
+**O que eu alterei:** alterei a lógica de controle da ALU para mapear `funct3` e `funct7` para as novas operações da Etapa 1. No bloco R-type, foram adicionadas as operações `SLL`, `SLTU`, `XOR`, `SRL` e `SRA`. No bloco I-type, foram adicionadas as operações `ADDI`, `SLLI`, `SLTI`, `SRLI`, `SRAI`, `ORI` e `ANDI`.
+
+**Por que alterei:** a ALU recebe apenas um código de operação, então o `pl_alu_ctrl` precisa traduzir os campos da instrução RISC-V para esse código interno da ALU.
+
+Trecho principal:
 
 ```systemverilog
 2'b10: begin
@@ -305,11 +319,19 @@ end
 end
 ```
 
-Explicação para apresentar: o `ALUOp` separa o tipo geral da instrução. Quando é R-type, o controle usa `funct3` e `funct7`. Quando é I-type aritmético, também usa esses campos, principalmente para diferenciar `SRLI` de `SRAI`.
+Na apresentação, eu destacaria que `Funct7[5]` é o bit usado para diferenciar `SRL` de `SRA` e também `SRLI` de `SRAI`.
 
 #### Controle principal das instruções I-type
 
-Arquivo: `src/pl_control.sv`, linhas 73 a 78.
+**Arquivo:** `src/pl_control.sv`
+
+**Linhas principais:** 73 a 78.
+
+**O que eu alterei:** adicionei o comportamento do opcode `0010011`, que representa as instruções I-type aritméticas.
+
+**Por que alterei:** essas instruções usam imediato como segundo operando e escrevem o resultado no registrador destino. Por isso, o controle precisa ativar `ALUSrc`, `RegWrite` e selecionar `ALUOp = 2'b11`.
+
+Trecho principal:
 
 ```systemverilog
 I_TYPE: begin
@@ -320,11 +342,19 @@ I_TYPE: begin
 end
 ```
 
-Explicação para apresentar: `ALUSrc = 1` faz a ALU usar o imediato como segundo operando, `RegWrite = 1` permite gravar o resultado no registrador destino, e `ALUOp = 2'b11` avisa ao `pl_alu_ctrl` que é uma instrução I-type aritmética.
+Na apresentação, eu explicaria que `ALUSrc = 1` faz a ALU usar o imediato, e `ALUOp = 2'b11` avisa ao `pl_alu_ctrl` que ele deve decodificar uma instrução I-type aritmética.
 
 #### Imediato das instruções I-type
 
-Arquivo: `src/pl_sign_ext.sv`, linhas 33 a 35.
+**Arquivo:** `src/pl_sign_ext.sv`
+
+**Linhas principais:** 33 a 35.
+
+**O que eu alterei:** incluí o formato I-type na extensão de imediato, usando os bits `Instr[31:20]`.
+
+**Por que alterei:** as instruções como `ADDI`, `ANDI`, `ORI`, `SLTI`, `SLLI`, `SRLI` e `SRAI` precisam que o imediato seja levado para 32 bits antes de entrar na ALU.
+
+Trecho principal:
 
 ```systemverilog
 I_TYPE,
@@ -332,13 +362,21 @@ JALR,
 LOAD: ImmExt = {{20{Instr[31]}}, Instr[31:20]};
 ```
 
-Explicação para apresentar: o imediato de 12 bits é estendido para 32 bits. Isso permite instruções como `ADDI`, `ANDI`, `ORI`, `SLTI`, `SLLI`, `SRLI` e `SRAI`.
+Na apresentação, eu explicaria que o imediato de 12 bits vira um valor de 32 bits para poder ser usado junto com os registradores, que também têm 32 bits.
 
 ### 6.2 Etapa 2 no código
 
 #### Novos sinais de controle
 
-Arquivo: `src/pl_control.sv`, linhas 45 a 51 e 79 a 118.
+**Arquivo:** `src/pl_control.sv`
+
+**Linhas principais:** 45 a 51 e 79 a 118.
+
+**O que eu alterei:** adicionei os opcodes da Etapa 2 (`LOAD`, `STORE`, `BRANCH`, `JAL`, `JALR`, `LUI`, `AUIPC`) e criei os sinais de controle necessários para jumps, U-type e novos caminhos de write-back.
+
+**Por que alterei:** o controle principal é quem identifica o tipo da instrução no estágio `ID`. Sem esses opcodes e sinais, o datapath não saberia quando mudar o `PC`, quando escrever `PC+4`, quando usar o `PC` como entrada da ALU ou quando escrever um imediato no registrador.
+
+Trecho dos opcodes:
 
 ```systemverilog
 localparam LOAD   = 7'b0000011;
@@ -350,7 +388,7 @@ localparam LUI    = 7'b0110111;
 localparam AUIPC  = 7'b0010111;
 ```
 
-Trecho importante do `JAL`, `JALR`, `LUI` e `AUIPC`:
+Trecho importante do controle de `JAL`, `JALR`, `LUI` e `AUIPC`:
 
 ```systemverilog
 JAL: begin
@@ -381,11 +419,19 @@ AUIPC: begin
 end
 ```
 
-Explicação para apresentar: `ResultSrc` foi necessário porque agora o valor escrito no registrador pode vir da ALU, da memória, do `PC+4` ou do imediato.
+Na apresentação, eu explicaria que `ResultSrc` foi necessário porque o valor escrito no registrador agora pode vir da ALU, da memória, do `PC+4` ou do imediato.
 
 #### Imediatos dos tipos S, B, U e J
 
-Arquivo: `src/pl_sign_ext.sv`, linhas 37 a 46.
+**Arquivo:** `src/pl_sign_ext.sv`
+
+**Linhas principais:** 37 a 46.
+
+**O que eu alterei:** adicionei a montagem dos imediatos dos formatos `S`, `B`, `U` e `J`.
+
+**Por que alterei:** a Etapa 2 usa instruções de store, branch, jump e U-type. Cada uma dessas instruções guarda o imediato em posições diferentes dentro dos 32 bits da instrução. Então o `sign_ext` precisa reorganizar esses bits no formato correto.
+
+Trecho principal:
 
 ```systemverilog
 STORE:  ImmExt = {{20{Instr[31]}}, Instr[31:25], Instr[11:7]};
@@ -400,11 +446,19 @@ LUI,
 AUIPC:  ImmExt = {Instr[31:12], 12'b0};
 ```
 
-Explicação para apresentar: cada formato do RISC-V espalha os bits do imediato em posições diferentes da instrução. Por isso o `sign_ext` precisa montar o imediato correto para cada tipo.
+Na apresentação, eu explicaria que os formatos `B` e `J` já colocam o bit zero como `0`, porque os desvios em RISC-V são alinhados.
 
 #### Novos campos nos registradores de pipeline
 
-Arquivo: `src/pl_pipe_pkg.sv`, linhas 29 a 36, 47 a 61 e 64 a 75.
+**Arquivo:** `src/pl_pipe_pkg.sv`
+
+**Linhas principais:** 29 a 36, 47 a 61 e 64 a 75.
+
+**O que eu alterei:** adicionei novos campos nos registradores de pipeline, como `jump`, `jump_reg`, `alu_a_src`, `result_src` e `pc_plus4`.
+
+**Por que alterei:** em um processador pipelined, os sinais gerados no decode precisam acompanhar a instrução pelos estágios seguintes. Por exemplo, `JAL` descobre no decode que precisa escrever `PC+4`, mas esse valor só é escrito no estágio `WB`.
+
+Trecho principal:
 
 ```systemverilog
 logic        jump;
@@ -414,11 +468,19 @@ logic [1:0]  result_src;
 logic [31:0] pc_plus4;
 ```
 
-Explicação para apresentar: esses campos precisam atravessar o pipeline porque a decisão começa no decode, mas o valor final só é usado nos estágios seguintes.
+Na apresentação, eu explicaria que isso é uma consequência direta do pipeline: uma informação decidida no estágio `ID` precisa chegar corretamente até `EX`, `MEM` ou `WB`.
 
 #### Conexão entre controle e datapath
 
-Arquivo: `src/pl_cpu.sv`, linhas 48 a 102.
+**Arquivo:** `src/pl_cpu.sv`
+
+**Linhas principais:** 48 a 102.
+
+**O que eu alterei:** declarei os sinais novos (`Jump`, `JumpReg`, `ALUASrc`, `ResultSrc`) e conectei esses sinais entre o `pl_control` e o `pl_datapath`.
+
+**Por que alterei:** o `pl_cpu` é o wrapper que liga a unidade de controle ao datapath. Como a Etapa 2 criou novos sinais de controle, eles precisavam passar por esse arquivo.
+
+Trecho principal:
 
 ```systemverilog
 logic       Jump, JumpReg, ALUASrc;
@@ -430,11 +492,19 @@ logic [1:0] ResultSrc;
 .ResultSrc (ResultSrc),
 ```
 
-Explicação para apresentar: o `pl_cpu` é o módulo que liga a unidade de controle ao datapath. Como surgiram novos sinais, eles precisaram ser declarados e conectados aqui.
+Na apresentação, eu explicaria que essa alteração não muda a lógica do processador sozinha, mas é necessária para que os novos sinais cheguem ao datapath.
 
 #### Mux de write-back com `ResultSrc`
 
-Arquivo: `src/pl_datapath.sv`, linhas 162 a 169.
+**Arquivo:** `src/pl_datapath.sv`
+
+**Linhas principais:** 162 a 169.
+
+**O que eu alterei:** substituí a escolha simples do write-back por uma seleção baseada em `result_src`.
+
+**Por que alterei:** antes, o processador precisava basicamente escolher entre resultado da ALU e dado vindo da memória. Com `JAL`, `JALR` e `LUI`, também é necessário escrever `PC+4` e imediato no registrador destino.
+
+Trecho principal:
 
 ```systemverilog
 case (mem_wb.result_src)
@@ -445,11 +515,19 @@ case (mem_wb.result_src)
 endcase
 ```
 
-Explicação para apresentar: antes praticamente bastava escolher entre ALU e memória. Com `JAL`, `JALR` e `LUI`, o write-back precisou de mais opções.
+Na apresentação, eu destacaria que esse mux é uma das mudanças centrais da Etapa 2, porque ele permite mais fontes de escrita no banco de registradores.
 
 #### Branches e jumps
 
-Arquivo: `src/pl_datapath.sv`, linhas 324 a 339.
+**Arquivo:** `src/pl_datapath.sv`
+
+**Linhas principais:** 324 a 339.
+
+**O que eu alterei:** implementei a comparação dos novos branches (`BNE`, `BLT`, `BGE`, `BLTU`, `BGEU`) e a escolha do próximo `PC` para branch, `JAL` e `JALR`.
+
+**Por que alterei:** o `BEQ` antigo só testava igualdade. A Etapa 2 exige comparações com sinal, sem sinal e jumps. Além disso, `JALR` precisa calcular o destino com `rs1 + imediato` e zerar o bit menos significativo.
+
+Trecho principal:
 
 ```systemverilog
 case (id_ex.funct3)
@@ -466,11 +544,19 @@ assign pc_target = id_ex.jump_reg ? {alu_result[31:1], 1'b0}
 assign pc_src    = (id_ex.branch && branch_taken) || id_ex.jump;
 ```
 
-Explicação para apresentar: os branches com sinal usam `$signed`, e os branches sem sinal usam comparação normal. O `JALR` usa o resultado da ALU e zera o bit menos significativo do endereço.
+Na apresentação, eu explicaria que os branches com sinal usam `$signed`, e os branches sem sinal usam comparação normal. Também mostraria que o `JALR` usa `{alu_result[31:1], 1'b0}` para forçar o endereço a ser alinhado.
 
 #### Stores menores com byte enable
 
-Arquivo: `src/pl_datapath.sv`, linhas 377 a 409, e `src/pl_dmem.sv`, linhas 16 a 43.
+**Arquivos:** `src/pl_datapath.sv` e `src/pl_dmem.sv`
+
+**Linhas principais:** `pl_datapath.sv`, linhas 377 a 409, e `pl_dmem.sv`, linhas 16 a 43.
+
+**O que eu alterei:** no datapath, adicionei a lógica que calcula quais bytes devem ser escritos para `SB`, `SH` e `SW`. Na memória de dados, adicionei a entrada `ByteEn` e alterei a escrita para atualizar apenas os bytes selecionados.
+
+**Por que alterei:** `SW` escreve 32 bits, mas `SB` escreve só 8 bits e `SH` escreve só 16 bits. Sem `ByteEn`, qualquer store sobrescreveria a palavra inteira.
+
+Trecho principal no datapath:
 
 ```systemverilog
 case (ex_mem.funct3)
@@ -490,7 +576,7 @@ case (ex_mem.funct3)
 endcase
 ```
 
-Na memória:
+Trecho principal na memória:
 
 ```systemverilog
 if (ByteEn[0]) ram[addr][7:0]   <= WriteData[7:0];
@@ -499,11 +585,19 @@ if (ByteEn[2]) ram[addr][23:16] <= WriteData[23:16];
 if (ByteEn[3]) ram[addr][31:24] <= WriteData[31:24];
 ```
 
-Explicação para apresentar: o `ByteEn` permite escrever só o byte ou halfword correto dentro de uma palavra de 32 bits.
+Na apresentação, eu explicaria que `ByteEn` funciona como uma máscara de escrita: cada bit habilita um byte da palavra de 32 bits.
 
 #### Loads menores com extensão correta
 
-Arquivo: `src/pl_datapath.sv`, linhas 429 a 446.
+**Arquivo:** `src/pl_datapath.sv`
+
+**Linhas principais:** 429 a 446.
+
+**O que eu alterei:** adicionei a seleção do byte ou halfword dentro da palavra lida da memória e implementei a extensão correta para `LB`, `LH`, `LBU` e `LHU`.
+
+**Por que alterei:** `LW` sempre carrega 32 bits, mas as novas instruções carregam apenas parte da palavra. Além disso, `LB` e `LH` precisam extensão com sinal, enquanto `LBU` e `LHU` precisam extensão com zero.
+
+Trecho principal:
 
 ```systemverilog
 case (ex_mem.funct3)
@@ -515,13 +609,19 @@ case (ex_mem.funct3)
 endcase
 ```
 
-Explicação para apresentar: `LB` e `LH` preservam o sinal do valor carregado. `LBU` e `LHU` completam com zero.
+Na apresentação, eu explicaria a diferença entre instruções com sinal e sem sinal usando o exemplo de `0xFF`: em `LB`, vira `0xFFFFFFFF`; em `LBU`, vira `0x000000FF`.
 
 ### 6.3 Código do testbench
 
-Arquivo: `src/pl_cpu_stage2_tb.sv`.
+**Arquivo criado:** `src/pl_cpu_stage2_tb.sv`
 
-O programa de teste é montado no próprio testbench nas linhas 228 a 285. Alguns exemplos:
+**Linhas principais:** 228 a 285 para montar o programa de teste, e 327 a 347 para conferir os resultados.
+
+**O que eu fiz:** criei um testbench específico para a Etapa 2. Em vez de depender de um arquivo `.asm`, o próprio testbench monta as instruções, escreve diretamente na memória de instruções e inicializa a memória de dados com valores conhecidos.
+
+**Por que fiz assim:** desse jeito o teste fica independente dos arquivos `program.hex`, `data.hex`, `instruction.mif` e `data.mif`. Isso facilita testar só a lógica da Etapa 2 no simulador.
+
+Trecho do programa de teste:
 
 ```systemverilog
 emit(enc_i(2, 5'd0, F3_LB,  5'd1, OP_LOAD), "lb   x1,2(x0)");
@@ -532,7 +632,7 @@ emit(enc_j(8, 5'd22),                        "jal  x22,+8");
 emit(enc_i(0, 5'd23, F3_ADDI, 5'd24, OP_JALR), "jalr x24,x23,0");
 ```
 
-As checagens finais ficam nas linhas 327 a 347:
+Trecho das checagens finais:
 
 ```systemverilog
 check_reg(1, 32'hFFFFFFFF, "LB com sinal");
@@ -543,7 +643,7 @@ check_reg(22, (jal_word * 4) + 4, "JAL link PC+4");
 check_reg(24, (jalr_word * 4) + 4, "JALR link PC+4");
 ```
 
-Explicação para apresentar: o testbench não depende de arquivo `.asm` para rodar. Ele monta as instruções, carrega a memória do processador e confere automaticamente os resultados.
+Na apresentação, eu explicaria que o testbench testa tanto o caminho correto quanto possíveis erros. Por exemplo, `x31` deve terminar zerado porque os branches e jumps tomados pulam instruções que somariam valores nele.
 
 ---
 
