@@ -103,7 +103,6 @@ module pl_datapath (
 
     // MEM
     logic        mmio_sel;
-    logic [3:0]  store_byte_en;
     logic [31:0] dmem_rd, mmio_rd, mem_read_data, load_data, store_write_data;
     logic [7:0]  load_byte;
     logic [15:0] load_half;
@@ -375,25 +374,23 @@ module pl_datapath (
     assign mmio_sel = ex_mem.alu_result[10];
 
     always_comb begin
-        store_byte_en   = 4'b1111;
         store_write_data = ex_mem.write_data;
 
         case (ex_mem.funct3)
             3'b000: begin // SB
-                store_write_data = {4{ex_mem.write_data[7:0]}};
                 case (ex_mem.alu_result[1:0])
-                    2'b00:   store_byte_en = 4'b0001;
-                    2'b01:   store_byte_en = 4'b0010;
-                    2'b10:   store_byte_en = 4'b0100;
-                    default: store_byte_en = 4'b1000;
+                    2'b00:   store_write_data = {dmem_rd[31:8],  ex_mem.write_data[7:0]};
+                    2'b01:   store_write_data = {dmem_rd[31:16], ex_mem.write_data[7:0], dmem_rd[7:0]};
+                    2'b10:   store_write_data = {dmem_rd[31:24], ex_mem.write_data[7:0], dmem_rd[15:0]};
+                    default: store_write_data = {ex_mem.write_data[7:0], dmem_rd[23:0]};
                 endcase
             end
             3'b001: begin // SH
-                store_write_data = {2{ex_mem.write_data[15:0]}};
-                store_byte_en    = ex_mem.alu_result[1] ? 4'b1100 : 4'b0011;
+                store_write_data = ex_mem.alu_result[1]
+                                 ? {ex_mem.write_data[15:0], dmem_rd[15:0]}
+                                 : {dmem_rd[31:16], ex_mem.write_data[15:0]};
             end
             default: begin // SW
-                store_byte_en    = 4'b1111;
                 store_write_data = ex_mem.write_data;
             end
         endcase
@@ -402,7 +399,6 @@ module pl_datapath (
     pl_dmem dmem (
         .clk       (clk),
         .MemWrite  (ex_mem.mem_write & ~mmio_sel),
-        .ByteEn    (store_byte_en),
         .addr      (ex_mem.alu_result[9:2]),
         .WriteData (store_write_data),
         .ReadData  (dmem_rd)
