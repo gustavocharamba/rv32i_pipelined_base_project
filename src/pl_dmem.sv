@@ -33,10 +33,15 @@ module pl_dmem (
 
     always@(posedge clk) begin
         if (MemWrite) begin
-            if (ByteEn[0]) ram[addr][7:0]   <= WriteData[7:0];
-            if (ByteEn[1]) ram[addr][15:8]  <= WriteData[15:8];
-            if (ByteEn[2]) ram[addr][23:16] <= WriteData[23:16];
-            if (ByteEn[3]) ram[addr][31:24] <= WriteData[31:24];
+            case (ByteEn)
+                4'b0001: ram[addr] <= {ram[addr][31:8],  WriteData[7:0]};
+                4'b0010: ram[addr] <= {ram[addr][31:16], WriteData[7:0],  ram[addr][7:0]};
+                4'b0100: ram[addr] <= {ram[addr][31:24], WriteData[7:0],  ram[addr][15:0]};
+                4'b1000: ram[addr] <= {WriteData[7:0],   ram[addr][23:0]};
+                4'b0011: ram[addr] <= {ram[addr][31:16], WriteData[15:0]};
+                4'b1100: ram[addr] <= {WriteData[15:0],  ram[addr][15:0]};
+                default: ram[addr] <= WriteData;
+            endcase
         end
     end
 
